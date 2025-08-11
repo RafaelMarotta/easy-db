@@ -1,0 +1,238 @@
+{
+  "name": "easy-db-manager",
+  "displayName": "Easy DB Manager",
+  "description": "A secure, multi-engine database manager for VS Code with variables, schema explorer, CRUD and query runner.",
+  "version": "0.1.0",
+  "publisher": "your-publisher-id",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:dbManager.explorer",
+    "onView:dbManager.queries"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dbManager",
+          "title": "DB Manager",
+          "icon": "media/database.svg"
+        }
+      ]
+    },
+    "views": {
+      "dbManager": [
+        {
+          "type": "tree",
+          "id": "dbManager.explorer",
+          "name": "Connections"
+        },
+        {
+          "type": "tree",
+          "id": "dbManager.queries",
+          "name": "Queries"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "easyDb.addConnection",
+          "when": "view == dbManager.explorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "easyDb.refreshExplorer",
+          "when": "view == dbManager.explorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "easyDb.openConsoles",
+          "when": "view == dbManager.explorer",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "easyDb.newQuery",
+          "when": "view == dbManager.explorer && viewItem == database",
+          "group": "inline@1"
+        },
+        {
+          "command": "easyDb.newQuery",
+          "when": "view == dbManager.explorer && viewItem == table",
+          "group": "inline@1"
+        },
+        {
+          "command": "easyDb.editConnection",
+          "when": "view == dbManager.explorer && viewItem == connection",
+          "group": "inline@8"
+        },
+        {
+          "command": "easyDb.removeConnection",
+          "when": "view == dbManager.explorer && viewItem == connection",
+          "group": "inline@9"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "easyDb.runQuery",
+          "when": "resourceLangId == sql",
+          "group": "navigation@9"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "easyDb.runQuery",
+          "when": "resourceLangId == sql",
+          "group": "navigation@9"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "easyDb.addConnection",
+        "title": "DB: Add Connection",
+        "icon": "$(add)"
+      },
+      {
+        "command": "easyDb.editConnection",
+        "title": "DB: Edit Connection",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "easyDb.removeConnection",
+        "title": "DB: Remove Connection",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "easyDb.connect",
+        "title": "DB: Connect",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "easyDb.disconnect",
+        "title": "DB: Disconnect",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "easyDb.refreshExplorer",
+        "title": "DB: Refresh Explorer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "easyDb.openCrud",
+        "title": "DB: Open CRUD for Table"
+      },
+      {
+        "command": "easyDb.newQuery",
+        "title": "DB: New Query",
+        "icon": "$(new-file)"
+      },
+        {
+          "command": "easyDb.openConsoles",
+          "title": "DB: Query Consoles",
+          "icon": "$(terminal)"
+        },
+      {
+        "command": "easyDb.runQuery",
+        "title": "DB: Run Query",
+        "icon": "$(play)"
+      },
+        {
+          "command": "easyDb.runLine",
+          "title": "DB: Run Line/Selection",
+          "icon": "$(run)"
+        },
+      {
+        "command": "easyDb.saveQuery",
+        "title": "DB: Save Query",
+        "icon": "$(save)"
+      },
+      {
+        "command": "easyDb.manageVariables",
+        "title": "DB: Manage Variables",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "easyDb.copyDdl",
+        "title": "DB: Copy DDL",
+        "icon": "$(clippy)"
+      }
+    ],
+      "keybindings": [
+        {
+          "command": "easyDb.runQuery",
+          "key": "cmd+enter",
+          "when": "editorTextFocus && resourceLangId == sql",
+          "mac": "cmd+enter",
+          "linux": "ctrl+enter",
+          "win": "ctrl+enter"
+        },
+        {
+          "command": "easyDb.runLine",
+          "key": "shift+enter",
+          "when": "editorTextFocus && resourceLangId == sql",
+          "mac": "shift+enter",
+          "linux": "shift+enter",
+          "win": "shift+enter"
+        }
+      ],
+    "configuration": {
+      "title": "Easy DB Manager",
+      "properties": {
+        "easyDb.telemetry.enable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable anonymous telemetry (counts and durations only; never SQL unless explicitly opted in)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "npm run clean && npm run build:webviews && tsc -p ./",
+    "build:webviews": "vite build --config web/vite.config.ts",
+    "dev:webviews": "vite --config web/vite.config.ts",
+    "clean": "rimraf dist",
+    "lint": "eslint .",
+    "test": "npm run compile && node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "^20.11.30",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@types/vscode": "^1.85.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "@vscode/test-electron": "^2.3.8",
+    "esbuild": "^0.21.5",
+    "eslint": "^8.56.0",
+    "glob": "^10.3.10",
+    "mocha": "^10.2.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.4.3",
+    "vite": "^5.3.4",
+    "vsce": "^2.15.0"
+  },
+  "dependencies": {
+    "@glideapps/glide-data-grid": "6.0.3",
+    "@tanstack/react-table": "^8.21.3",
+    "@vscode/codicons": "^0.0.39",
+    "mysql2": "^3.9.7",
+    "pg": "^8.11.5",
+    "pg-query-stream": "^4.5.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

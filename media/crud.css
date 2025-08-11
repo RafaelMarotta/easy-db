@@ -1,0 +1,12 @@
+.toolbar { display: flex; gap: 8px; padding: 8px; }
+#
+.icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; }
+#grid { display: grid; grid-auto-rows: auto; gap: 2px; padding: 8px; }
+.row { display: grid; grid-template-columns: var(--grid-template, repeat(auto-fit, minmax(120px, 1fr))); gap: 4px; }
+.cell { padding: 4px 6px; border: 1px solid var(--vscode-editorWidget-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell:focus { outline: 1px solid var(--vscode-focusBorder); }
+.header .cell { font-weight: bold; background: var(--vscode-editorWidget-background); }
+#grid[data-pk] .row:not(.header) .cell[contenteditable][data-col].pk { background: rgba(127,127,127,0.15); pointer-events: none; }
+#status { margin: 8px; }
+.cell.editing { background: rgba(255, 215, 0, 0.2); border-color: rgba(255, 215, 0, 0.6); }
+.resizer { cursor: col-resize; width: 6px; height: 100%; display: inline-block; }

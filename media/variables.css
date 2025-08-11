@@ -1,0 +1,6 @@
+.toolbar { display: flex; gap: 8px; padding: 8px; }
+#list { display: grid; grid-auto-rows: auto; gap: 2px; padding: 8px; }
+.row { display: grid; grid-template-columns: 1fr 120px 1fr 80px 120px; gap: 4px; }
+.cell { padding: 4px 6px; border: 1px solid var(--vscode-editorWidget-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.header .cell { font-weight: bold; background: var(--vscode-editorWidget-background); }
+#status { margin: 8px; }

@@ -1,0 +1,18 @@
+{
+  "../node_modules/@vscode/codicons/dist/codicon.ttf": {
+    "file": "assets/codicon-BFRvxKK-.ttf",
+    "src": "../node_modules/@vscode/codicons/dist/codicon.ttf"
+  },
+  "index.html": {
+    "file": "assets/index-sBpuOBfh.js",
+    "name": "index",
+    "src": "index.html",
+    "isEntry": true,
+    "css": [
+      "assets/index-CUefaaAx.css"
+    ],
+    "assets": [
+      "assets/codicon-BFRvxKK-.ttf"
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+.toolbar { display: flex; gap: 8px; padding: 8px; }
+#sql { width: 100%; height: 160px; }
+#results { display: grid; grid-auto-rows: auto; gap: 2px; padding: 8px; }
+.row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(80px, auto); gap: 4px; }
+.cell { padding: 4px 6px; border: 1px solid var(--vscode-editorWidget-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.header .cell { font-weight: bold; background: var(--vscode-editorWidget-background); }
+#status { margin-left: auto; }
