@@ -8,7 +8,7 @@ export interface ToolbarProps {
   hasEdits: boolean;
   columnsCount: number;
   rowsCount: number;
-  children?: React.ReactNode; // for right-side extra controls (e.g., pagination)
+  children?: React.ReactNode; 
 }
 
 export function Toolbar(props: ToolbarProps) {

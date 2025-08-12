@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
-import { getNonce, sanitizeHtml } from "./webviewUtils";
+import { getNonce, sanitizeHtml, resolveWebAssetUris } from "./webviewUtils";
 import { ConnectionConfig } from "../adapters/types";
-import { resolveVariables, deleteVariable, saveVariablesBulk, gatherVariables } from "../utils/variables";
+import { resolveVariables, deleteVariable, saveVariablesBulk, gatherVariables, interpolateString } from "../utils/variables";
 
 export interface ConnectionDraft {
   id: string;
@@ -19,6 +19,7 @@ export interface ConnectionDraft {
 export class ConnectionViewPanel {
   public static readonly viewType = "easyDb.connection";
   private panel?: vscode.WebviewPanel;
+  private initialDefaults?: Partial<ConnectionDraft>;
 
   constructor(private readonly ctx: vscode.ExtensionContext, private readonly onSave: (draft: ConnectionDraft) => Promise<void>, private readonly onTest: (draft: ConnectionDraft) => Promise<{ ok: boolean; message: string }>) {}
 
@@ -26,13 +27,18 @@ export class ConnectionViewPanel {
     const panel = vscode.window.createWebviewPanel(ConnectionViewPanel.viewType, `Create Connection`, vscode.ViewColumn.Active, {
       enableScripts: true,
       retainContextWhenHidden: false,
-      localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, "media")]
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.ctx.extensionUri, "media"),
+        vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist"),
+        vscode.Uri.joinPath(this.ctx.extensionUri, "node_modules", "@vscode", "codicons", "dist")
+      ]
     });
     this.panel = panel;
+    this.initialDefaults = defaults;
     const nonce = getNonce();
-    const scriptUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "connection.js"));
-    const styleUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "connection.css"));
-    panel.webview.html = this.getHtml(scriptUri, styleUri, nonce);
+    const assets = resolveWebAssetUris({ webview: panel.webview, extensionUri: this.ctx.extensionUri });
+    const codiconUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "node_modules", "@vscode", "codicons", "dist", "codicon.css"));
+    panel.webview.html = this.getHtml(panel, assets, codiconUri, panel.webview.cspSource, nonce);
 
     panel.webview.onDidReceiveMessage(async (msg) => {
       try {
@@ -45,6 +51,18 @@ export class ConnectionViewPanel {
           const items = vars.map(v => ({ id: v.id, value: v.value ?? "" }));
           this.post({ type: "variablesList", items });
         }
+        if (msg.type === "openVariables") {
+          try {
+            await vscode.commands.executeCommand("easyDb.manageVariables");
+          } catch (err) {
+            this.post({ type: "error", message: String((err as any)?.message ?? err) });
+          }
+        }
+        if (msg.type === "requestDefaults") {
+          if (this.initialDefaults) {
+            this.post({ type: "initDefaults", defaults: this.initialDefaults });
+          }
+        }
         if (msg.type === "variablesBulkSave") {
           await saveVariablesBulk(this.ctx, msg.items || []);
           this.post({ type: "variablesSaved" });
@@ -55,11 +73,14 @@ export class ConnectionViewPanel {
         }
         if (msg.type === "test") {
           const draft = this.cleanDraft(msg.draft);
-          const r = await this.onTest(draft);
+          const resolvedDraft = await this.resolveDraftVariables(draft);
+          console.log("Testing connection with resolved variables:", { original: draft, resolved: resolvedDraft });
+          const r = await this.onTest(resolvedDraft);
           this.post({ type: "testResult", ok: !!r.ok, message: sanitizeHtml(r.message) });
         }
         if (msg.type === "save") {
           const draft = this.cleanDraft(msg.draft);
+          console.log("Saving connection with variable syntax preserved:", draft);
           await this.onSave(draft);
           this.post({ type: "saved" });
           panel.dispose();
@@ -73,10 +94,12 @@ export class ConnectionViewPanel {
     });
 
     // initial variables preview and optional defaults
-    this.post({ type: "variablesPreview" });
-    if (defaults) {
-      this.post({ type: "initDefaults", defaults });
-    }
+    setTimeout(() => {
+      this.post({ type: "variablesPreview" });
+      if (this.initialDefaults) {
+        this.post({ type: "initDefaults", defaults: this.initialDefaults });
+      }
+    }, 100);
   }
 
   private cleanDraft(raw: any): ConnectionDraft {
@@ -94,68 +117,109 @@ export class ConnectionViewPanel {
     };
   }
 
-  private getHtml(scriptUri: vscode.Uri, styleUri: vscode.Uri, nonce: string): string {
+  private async resolveDraftVariables(draft: ConnectionDraft): Promise<ConnectionDraft> {
+    const { values } = await resolveVariables(this.ctx);
+    const resolver = (name: string) => values.get(name);
+
+    const resolveField = (field: string | undefined): string | undefined => {
+      if (!field) return field;
+      try {
+        return interpolateString(field, resolver);
+      } catch (err) {
+        console.warn(`Failed to resolve variables in field: ${field}`, err);
+        return field; // Return original if resolution fails
+      }
+    };
+
+    return {
+      ...draft,
+      host: resolveField(draft.host) || draft.host,
+      database: resolveField(draft.database),
+      user: resolveField(draft.user),
+      password: resolveField(draft.password),
+      ssl: draft.ssl ? {
+        ...draft.ssl,
+        caPath: resolveField(draft.ssl.caPath)
+      } : draft.ssl,
+      ssh: draft.ssh ? {
+        ...draft.ssh,
+        host: resolveField(draft.ssh.host) || draft.ssh.host,
+        user: resolveField(draft.ssh.user) || draft.ssh.user,
+        keyPath: resolveField(draft.ssh.keyPath),
+        passphrase: resolveField(draft.ssh.passphrase)
+      } : draft.ssh
+    };
+  }
+
+  private getHtml(panel: vscode.WebviewPanel, assets: { css: string[]; js: string[] }, codiconUri: vscode.Uri, cspSource: string, nonce: string): string {
+    // Use connection-specific assets from the manifest
+    const connectionAssets = this.resolveConnectionAssets(panel.webview);
+    
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}' ${cspSource}; style-src 'nonce-${nonce}' ${cspSource}; font-src ${cspSource};" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="${styleUri}" nonce="${nonce}" />
+  ${connectionAssets.css.map(href => `<link rel=\"stylesheet\" href=\"${href}\" nonce=\"${nonce}\" />`).join("\n  ")}
+  <link rel="stylesheet" href="${codiconUri}" nonce="${nonce}" />
   <title>Create Connection</title>
 </head>
 <body>
-  <div id="app" class="container" aria-label="Create Connection">
-    <h2><span class="icon">🔌</span> New Connection</h2>
-    <form id="form" autocomplete="off">
-      <input id="connId" type="hidden" />
-      <div class="grid">
-        <label>Name<input id="name" required /></label>
-        <label>Driver<select id="driver"><option value="mysql">MySQL</option></select></label>
-        <label>Host<input id="host" value="localhost" required /></label>
-        <label>Port<input id="port" type="number" value="3306" required /></label>
-        <label>Database<input id="database" /></label>
-        <label>User<input id="user" /></label>
-        <label>Password
-          <div class="input-row">
-            <input id="password" type="password" placeholder="plain or ${'{'}varName{'}'}" />
-            <button id="togglePw" type="button" aria-label="Show password">Show</button>
-          </div>
-        </label>
-        <label>SSL Mode<select id="sslMode"><option value="disable">Disable</option><option value="require">Require</option><option value="verify-ca">Verify CA</option><option value="verify-full">Verify Full</option></select></label>
-        <label>SSL CA Path<input id="sslCa" placeholder="/path/to/ca.pem" /></label>
-      </div>
-      <details class="ssh">
-        <summary>SSH Tunnel (optional)</summary>
-        <div class="grid">
-          <label>SSH Host<input id="sshHost" /></label>
-          <label>SSH User<input id="sshUser" /></label>
-          <label>SSH Port<input id="sshPort" type="number" placeholder="22" /></label>
-          <label>SSH Key Path<input id="sshKey" placeholder="~/.ssh/id_rsa" /></label>
-          <label>SSH Passphrase<input id="sshPass" type="password" /></label>
-        </div>
-      </details>
-      <div class="actions">
-        <button id="test" type="button">Test Connection</button>
-        <button id="save" type="submit" class="primary">Save</button>
-        <button id="cancel" type="button">Cancel</button>
-        <span id="status" role="status"></span>
-      </div>
-      <section class="variables">
-        <h3>Variables</h3>
-        <div class="vars-toolbar">
-          <button id="varAdd" type="button">Add Variable</button>
-          <button id="varsSaveAll" type="button" class="primary">Save All</button>
-          <span class="muted">Global variables reusable across connections.</span>
-        </div>
-        <div id="varsList" role="table" aria-label="Variables"></div>
-        <div class="preview">Preview: <code id="vars"></code></div>
-      </section>
-    </form>
-  </div>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
+  <div id="root"></div>
+  ${connectionAssets.js.map(src => `<script type="module" src=\"${src}\" nonce=\"${nonce}\"></script>`).join("\n  ")}
 </body>
 </html>`;
+  }
+
+  private resolveConnectionAssets(webview: vscode.Webview): { css: string[]; js: string[] } {
+    const vscode = require('vscode') as typeof import('vscode');
+    const manifestPath = vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'dist', '.vite', 'manifest.json');
+    
+    try {
+      const data = require(manifestPath.fsPath);
+      const entry = data['connection.html'];
+      const jsFiles: string[] = [];
+      const cssFiles: string[] = [];
+      
+      const pushAsset = (p: string) => {
+        const assetUri = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, 'media', 'dist', p));
+        const s = assetUri.toString();
+        if (p.endsWith('.js')) jsFiles.push(s); 
+        else if (p.endsWith('.css')) cssFiles.push(s);
+      };
+      
+      // Add the main entry file
+      if (entry?.file) pushAsset(entry.file);
+      
+      // Add CSS files from the entry
+      if (Array.isArray(entry?.css)) {
+        entry.css.forEach((p: string) => pushAsset(p));
+      }
+      
+      // Add imports (like codicon)
+      if (Array.isArray(entry?.imports)) {
+        entry.imports.forEach((importKey: string) => {
+          const importEntry = data[importKey];
+          if (importEntry?.file) pushAsset(importEntry.file);
+          if (Array.isArray(importEntry?.css)) {
+            importEntry.css.forEach((p: string) => pushAsset(p));
+          }
+        });
+      }
+      
+      return { css: cssFiles, js: jsFiles };
+    } catch (err) {
+      console.warn('Failed to resolve connection assets from manifest, using fallback', err);
+      // Fallback to hardcoded connection assets based on the actual manifest structure
+      const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist", "assets", "connection-mTRQc80m.js"));
+      const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist", "assets", "codicon-CUefaaAx.css"));
+      const codiconJsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist", "assets", "codicon-CWFHOcLG.js"));
+      return { 
+        css: [cssUri.toString()], 
+        js: [codiconJsUri.toString(), jsUri.toString()]
+      };
+    }
   }
 
   private post(message: any) {

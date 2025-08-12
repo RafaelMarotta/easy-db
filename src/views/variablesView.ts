@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { Variable, VariableScope } from "../adapters/types";
-import { getNonce, sanitizeHtml } from "./webviewUtils";
+import { getNonce, sanitizeHtml, resolveWebAssetUris } from "./webviewUtils";
+import { gatherVariables, saveVariablesBulk, deleteVariable } from "../utils/variables";
 
 export class VariablesViewPanel {
   public static readonly viewType = "easyDb.variables";
@@ -11,25 +12,47 @@ export class VariablesViewPanel {
   open() {
     const panel = vscode.window.createWebviewPanel(VariablesViewPanel.viewType, `Variables`, vscode.ViewColumn.Active, {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, "media")]
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.ctx.extensionUri, "media"),
+        vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist"),
+        vscode.Uri.joinPath(this.ctx.extensionUri, "node_modules", "@vscode", "codicons", "dist")
+      ]
     });
     this.panel = panel;
     const nonce = getNonce();
-    const scriptUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "variables.js"));
-    const styleUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "variables.css"));
-    panel.webview.html = this.getHtml(scriptUri, styleUri, nonce);
+    // Find variables.html entry from manifest (fallback handled below)
+    const manifest = require(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist", ".vite", "manifest.json").fsPath);
+    const variablesEntry = manifest["variables.html"];
+    const js: string[] = [];
+    const css: string[] = [];
+    const push = (p: string) => {
+      const u = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist", p)).toString();
+      if (p.endsWith(".js")) js.push(u); else if (p.endsWith(".css")) css.push(u);
+    };
+    if (variablesEntry?.file) push(variablesEntry.file);
+    if (Array.isArray(variablesEntry?.css)) variablesEntry.css.forEach(push);
+    const codiconUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "node_modules", "@vscode", "codicons", "dist", "codicon.css"));
+    if (js.length === 0) {
+      // Fallback to hardcoded assets if manifest lookup fails
+      const jsUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist", "assets", "variables-DcU114Qf.js")).toString();
+      const cssUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(this.ctx.extensionUri, "media", "dist", "assets", "codicon-CUefaaAx.css")).toString();
+      panel.webview.html = this.getHtml([jsUri], [codiconUri.toString(), cssUri], nonce, panel.webview.cspSource);
+    } else {
+      panel.webview.html = this.getHtml(js, [codiconUri.toString(), ...css], nonce, panel.webview.cspSource);
+    }
 
     panel.webview.onDidReceiveMessage(async (msg) => {
       try {
-        if (msg.type === "list") {
-          const all = await this.loadVariables();
-          this.post({ type: "variables", items: all.map(v => ({ ...v, value: v.isSecret ? undefined : v.value })) });
-        } else if (msg.type === "save") {
-          await this.saveVariable(msg.variable as Variable);
-          this.post({ type: "saved" });
-        } else if (msg.type === "delete") {
-          await this.deleteVariable(String(msg.id));
-          this.post({ type: "deleted" });
+        if (msg.type === "variablesList") {
+          const vars = await gatherVariables(this.ctx);
+          const items = vars.map(v => ({ id: v.id, value: v.value ?? "" }));
+          this.post({ type: "variablesList", items });
+        } else if (msg.type === "variablesBulkSave") {
+          await saveVariablesBulk(this.ctx, msg.items || []);
+          this.post({ type: "variablesSaved" });
+        } else if (msg.type === "variableDelete") {
+          await deleteVariable(this.ctx, String(msg.id));
+          this.post({ type: "variableDeleted" });
         }
       } catch (err: any) {
         this.post({ type: "error", message: String(err?.message ?? err) });
@@ -37,25 +60,19 @@ export class VariablesViewPanel {
     });
   }
 
-  private getHtml(scriptUri: vscode.Uri, styleUri: vscode.Uri, nonce: string): string {
+  private getHtml(jsUris: string[], cssUris: string[], nonce: string, cspSource: string): string {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}' ${cspSource}; style-src 'nonce-${nonce}' ${cspSource}; font-src ${cspSource};" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="${styleUri}" nonce="${nonce}" />
+  ${cssUris.map(h => `<link rel="stylesheet" href="${h}" nonce="${nonce}" />`).join("\n  ")}
   <title>Variables</title>
 </head>
 <body>
-  <div id="app" aria-label="Variables Manager">
-    <div class="toolbar">
-      <button id="add" aria-label="Add">Add</button>
-    </div>
-    <div id="list" role="table"></div>
-    <div id="status" role="status"></div>
-  </div>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
+  <div id="root"></div>
+  ${jsUris.map(s => `<script type="module" nonce="${nonce}" src="${s}"></script>`).join("\n  ")}
 </body>
 </html>`;
   }

@@ -21,7 +21,15 @@ export function activate(context: vscode.ExtensionContext) {
   const docToConnection: Map<string, string> = new Map();
 
   const explorer = new DbExplorerProvider(
-    async () => Array.from(connections.values()).map(c => ({ id: c.id, name: c.name, client: clients[c.id] ?? null })),
+    async () => {
+      // Resolve variables for display (e.g., connection name may contain ${var})
+      const { values } = await resolveVariables(context);
+      const resolveField = (s?: string) => {
+        if (!s) return "";
+        try { return interpolateString(s, (n) => values.get(n)); } catch { return s; }
+      };
+      return Array.from(connections.values()).map(c => ({ id: c.id, name: resolveField(c.name), client: clients[c.id] ?? null }));
+    },
     async (id: string) => clients[id] ?? null
   );
   const tree = vscode.window.createTreeView("dbManager.explorer", { treeDataProvider: explorer });
@@ -43,14 +51,21 @@ export function activate(context: vscode.ExtensionContext) {
       const isExpr = typeof draft.password === "string" && /\$\{[A-Za-z0-9_.-]+\}/.test(draft.password);
       const passwordSecretKey = !isExpr && draft.password ? `conn:${id}:password` : undefined;
       if (draft.password && passwordSecretKey) await context.secrets.store(passwordSecretKey, draft.password);
+      // Resolve variables for persisted non-secret fields (name/user/host/database) so connection attempts use resolved values,
+      // while keeping password as expr when applicable
+      const { values } = await resolveVariables(context);
+      const safeInterpolate = (s?: string): string | undefined => {
+        if (!s) return undefined;
+        try { return interpolateString(s, (n) => values.get(n)); } catch { return s; }
+      };
       const cfg: StoredConnection = {
         id,
-        name: draft.name,
+        name: safeInterpolate(draft.name) || "",
         driver: draft.driver,
-        host: draft.host,
+        host: safeInterpolate(draft.host) || draft.host,
         port: draft.port,
-        database: draft.database,
-        user: draft.user,
+        database: safeInterpolate(draft.database),
+        user: safeInterpolate(draft.user),
         passwordSecretKey,
         passwordExpr: isExpr ? draft.password : undefined,
         ssl: draft.ssl,
@@ -238,6 +253,17 @@ export function activate(context: vscode.ExtensionContext) {
       let pick = arg && arg.contextData?.connectionId ? connections.get(String(arg.contextData.connectionId)) : undefined;
       if (!pick) pick = await pickConnection(connections);
       if (!pick) return;
+      console.log("Opening connection for edit:", pick);
+      
+      // Prepare SSH data, handling passphrase properly
+      const sshData = pick.ssh ? {
+        host: pick.ssh.host || "",
+        user: pick.ssh.user || "",
+        keyPath: pick.ssh.keyPath || "",
+        passphrase: pick.ssh.passphraseSecretKey ? `\${ssh_passphrase}` : "",
+        port: pick.ssh.port || 22
+      } : undefined;
+      
       await connectionPanel.open({
         id: pick.id,
         name: pick.name,
@@ -246,7 +272,9 @@ export function activate(context: vscode.ExtensionContext) {
         port: pick.port,
         database: pick.database,
         user: pick.user,
-        password: pick.passwordExpr ? pick.passwordExpr : undefined
+        password: pick.passwordExpr ? pick.passwordExpr : undefined,
+        ssl: pick.ssl,
+        ssh: sshData
       });
     }),
     vscode.commands.registerCommand("easyDb.removeConnection", async (arg?: any) => {

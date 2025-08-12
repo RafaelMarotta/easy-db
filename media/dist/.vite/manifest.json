@@ -3,16 +3,51 @@
     "file": "assets/codicon-BFRvxKK-.ttf",
     "src": "../node_modules/@vscode/codicons/dist/codicon.ttf"
   },
-  "index.html": {
-    "file": "assets/index-DkMktLC9.js",
-    "name": "index",
-    "src": "index.html",
+  "_client-CkCYsZd5.js": {
+    "file": "assets/client-CkCYsZd5.js",
+    "name": "client"
+  },
+  "_codicon-!~{005}~.js": {
+    "file": "assets/codicon-CUefaaAx.css",
+    "src": "_codicon-!~{005}~.js"
+  },
+  "connection.html": {
+    "file": "assets/connection-V4zj54bs.js",
+    "name": "connection",
+    "src": "connection.html",
     "isEntry": true,
+    "imports": [
+      "_client-CkCYsZd5.js"
+    ],
     "css": [
-      "assets/index-CUefaaAx.css"
+      "assets/codicon-CUefaaAx.css"
     ],
     "assets": [
       "assets/codicon-BFRvxKK-.ttf"
+    ]
+  },
+  "index.html": {
+    "file": "assets/main-zmdqemhU.js",
+    "name": "main",
+    "src": "index.html",
+    "isEntry": true,
+    "imports": [
+      "_client-CkCYsZd5.js"
+    ],
+    "css": [
+      "assets/codicon-CUefaaAx.css"
+    ],
+    "assets": [
+      "assets/codicon-BFRvxKK-.ttf"
+    ]
+  },
+  "variables.html": {
+    "file": "assets/variables-DcU114Qf.js",
+    "name": "variables",
+    "src": "variables.html",
+    "isEntry": true,
+    "imports": [
+      "_client-CkCYsZd5.js"
     ]
   }
 }
