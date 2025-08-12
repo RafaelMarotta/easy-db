@@ -2,7 +2,7 @@
   "name": "easy-db",
   "displayName": "Easy DB",
   "description": "A secure, multi-engine database manager for VS Code with variables, schema explorer, CRUD and query runner.",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "publisher": "easy-db",
   "repository": {
     "type": "git",
@@ -143,21 +143,21 @@
         "title": "DB: New Query",
         "icon": "$(new-file)"
       },
-        {
-          "command": "easyDb.openConsoles",
-          "title": "DB: Query Consoles",
-          "icon": "$(terminal)"
-        },
+      {
+        "command": "easyDb.openConsoles",
+        "title": "DB: Query Consoles",
+        "icon": "$(terminal)"
+      },
       {
         "command": "easyDb.runQuery",
         "title": "DB: Run Query",
         "icon": "$(play)"
       },
-        {
-          "command": "easyDb.runLine",
-          "title": "DB: Run Line/Selection",
-          "icon": "$(run)"
-        },
+      {
+        "command": "easyDb.runLine",
+        "title": "DB: Run Line/Selection",
+        "icon": "$(run)"
+      },
       {
         "command": "easyDb.saveQuery",
         "title": "DB: Save Query",
@@ -174,24 +174,24 @@
         "icon": "$(clippy)"
       }
     ],
-      "keybindings": [
-        {
-          "command": "easyDb.runQuery",
-          "key": "cmd+enter",
-          "when": "editorTextFocus && resourceLangId == sql",
-          "mac": "cmd+enter",
-          "linux": "ctrl+enter",
-          "win": "ctrl+enter"
-        },
-        {
-          "command": "easyDb.runLine",
-          "key": "shift+enter",
-          "when": "editorTextFocus && resourceLangId == sql",
-          "mac": "shift+enter",
-          "linux": "shift+enter",
-          "win": "shift+enter"
-        }
-      ],
+    "keybindings": [
+      {
+        "command": "easyDb.runQuery",
+        "key": "cmd+enter",
+        "when": "editorTextFocus && resourceLangId == sql",
+        "mac": "cmd+enter",
+        "linux": "ctrl+enter",
+        "win": "ctrl+enter"
+      },
+      {
+        "command": "easyDb.runLine",
+        "key": "shift+enter",
+        "when": "editorTextFocus && resourceLangId == sql",
+        "mac": "shift+enter",
+        "linux": "shift+enter",
+        "win": "shift+enter"
+      }
+    ],
     "configuration": {
       "title": "Easy DB Manager",
       "properties": {
@@ -238,7 +238,6 @@
     "@tanstack/react-table": "^8.21.3",
     "@vscode/codicons": "^0.0.39",
     "mysql2": "^3.9.7",
-    
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   }
