@@ -102,9 +102,9 @@ class ConnectionViewPanel {
         return {
             id: String(raw.id || Date.now()),
             name: String(raw.name || ""),
-            driver: raw.driver === "mysql" ? "mysql" : "postgres",
+            driver: "mysql",
             host: String(raw.host || "localhost"),
-            port: Number(raw.port || (raw.driver === "mysql" ? 3306 : 5432)),
+            port: Number(raw.port || 3306),
             database: raw.database ? String(raw.database) : undefined,
             user: raw.user ? String(raw.user) : undefined,
             password: raw.password ? String(raw.password) : undefined,
@@ -129,9 +129,9 @@ class ConnectionViewPanel {
       <input id="connId" type="hidden" />
       <div class="grid">
         <label>Name<input id="name" required /></label>
-        <label>Driver<select id="driver"><option value="postgres">Postgres</option><option value="mysql">MySQL</option></select></label>
+        <label>Driver<select id="driver"><option value="mysql">MySQL</option></select></label>
         <label>Host<input id="host" value="localhost" required /></label>
-        <label>Port<input id="port" type="number" value="5432" required /></label>
+        <label>Port<input id="port" type="number" value="3306" required /></label>
         <label>Database<input id="database" /></label>
         <label>User<input id="user" /></label>
         <label>Password

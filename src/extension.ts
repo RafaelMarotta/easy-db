@@ -4,7 +4,6 @@ import { CrudViewPanel } from "./views/crudView";
 import { VariablesViewPanel } from "./views/variablesView";
 import { ConnectionViewPanel, ConnectionDraft } from "./views/connectionView";
 import { ConnectionConfig, DbClient, TableRef } from "./adapters/types";
-import { PostgresClient } from "./adapters/postgres";
 import { MySqlClient } from "./adapters/mysql";
 import { resolveVariables, interpolateString } from "./utils/variables";
 import { resolveWebAssetUris, sanitizeHtml, getNonce } from "./views/webviewUtils";
@@ -81,7 +80,7 @@ export function activate(context: vscode.ExtensionContext) {
         ssl: draft.ssl,
       };
       try {
-        const client: DbClient = draft.driver === "postgres" ? new PostgresClient() : new MySqlClient();
+        const client: DbClient = new MySqlClient();
         await client.connect(runtimeCfg);
         await client.disconnect();
         return { ok: true, message: "Success" };
@@ -153,7 +152,38 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Track query consoles (open SQL docs) per connection
   const consolesByConnection: Map<string, vscode.TextDocument[]> = new Map();
-  function indexConsole(doc: vscode.TextDocument, connId: string) {
+  // Reuse a single results panel per console document
+  const resultsPanelByDoc: Map<string, {
+    panel: vscode.WebviewPanel;
+    ready: Promise<void>;
+    resolveReady: (() => void) | null;
+    inFlight: boolean;
+    latestSql: string;
+    pendingSql: string | null;
+  }> = new Map();
+  function sanitizePathSegment(name: string): string {
+    const trimmed = name.trim();
+    return trimmed.replace(/[\\/:*?"<>|]/g, "_");
+  }
+
+  async function getConsolesDir(connId: string): Promise<vscode.Uri> {
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    const connName = connections.get(connId)?.name || connId;
+    const safeConn = sanitizePathSegment(connName);
+    if (folder) {
+      const base = vscode.Uri.joinPath(folder.uri, ".vscode", "easy-db", "consoles", safeConn);
+      await vscode.workspace.fs.createDirectory(base);
+      return base;
+    }
+    const path = require('path');
+    const os = require('os');
+    const baseFs = path.join(os.homedir(), ".vscode", "easy-db", "consoles", safeConn);
+    const base = vscode.Uri.file(baseFs);
+    await vscode.workspace.fs.createDirectory(base);
+    return base;
+  }
+
+  async function indexConsole(doc: vscode.TextDocument, connId: string) {
     const list = consolesByConnection.get(connId) ?? [];
     if (!list.find(d => d.uri.toString() === doc.uri.toString())) list.push(doc);
     consolesByConnection.set(connId, list);
@@ -161,16 +191,14 @@ export function activate(context: vscode.ExtensionContext) {
     if (doc.isUntitled) {
       (async () => {
         try {
-          const folder = vscode.workspace.workspaceFolders?.[0];
-          const rel = `console-${Date.now()}.sql`;
-          const uri = folder ? vscode.Uri.joinPath(folder.uri, rel) : vscode.Uri.file(require('path').join(require('os').homedir(), rel));
-          await vscode.workspace.fs.writeFile(uri, Buffer.from(doc.getText(), 'utf8'));
-          const newDoc = await vscode.workspace.openTextDocument(uri);
+          const dir = await getConsolesDir(connId);
+          const file = vscode.Uri.joinPath(dir, `console-${Date.now()}.sql`);
+          await vscode.workspace.fs.writeFile(file, Buffer.from(doc.getText(), 'utf8'));
+          const newDoc = await vscode.workspace.openTextDocument(file);
           await vscode.window.showTextDocument(newDoc, { preview: false });
           docToConnection.set(newDoc.uri.toString(), connId);
-          indexConsole(newDoc, connId);
-          // Do not programmatically close the original untitled model to avoid VS Code
-          // "Model is disposed!" errors emitted by other extensions. Let the user close it.
+          await indexConsole(newDoc, connId);
+          // Do not programmatically close the original untitled model to avoid VS Code issues
         } catch {}
       })();
     }
@@ -190,13 +218,14 @@ export function activate(context: vscode.ExtensionContext) {
     return { name: strip(token) } as TableRef;
   }
 
-  function buildSqlTemplate(ref?: { name?: string; schema?: string }, driver?: "postgres" | "mysql"): string {
+  function buildSqlTemplate(ref?: { name?: string; schema?: string }, driver?: "mysql"): string {
     if (!ref) return `-- Write your SQL here\nselect 1;\n`;
     if (driver === "mysql") {
       const full = ref.schema ? `\`${String(ref.schema).replace(/`/g, "``")}\`.\`${String(ref.name ?? "").replace(/`/g, "``")}\`` : `\`${String(ref.name ?? "").replace(/`/g, "``")}\``;
       return `-- New query\nselect * from ${full} limit 100;\n`;
     }
-    const full = ref.schema ? `"${String(ref.schema).replace(/\"/g, '\\"')}"."${String(ref.name ?? "").replace(/\"/g, '\\"')}"` : `"${String(ref.name ?? "").replace(/\"/g, '\\"')}"`;
+    // default to mysql quoting
+    const full = ref.schema ? `\`${String(ref.schema).replace(/`/g, "``")}\`.\`${String(ref.name ?? "").replace(/`/g, "``")}\`` : `\`${String(ref.name ?? "").replace(/`/g, "``")}\``;
     return `-- New query\nselect * from ${full} limit 100;\n`;
   }
 
@@ -283,117 +312,87 @@ export function activate(context: vscode.ExtensionContext) {
       if (!editor) return;
       const doc = editor.document;
       const sql = editor.selection && !editor.selection.isEmpty ? doc.getText(editor.selection) : doc.getText();
-      const connectionId: string | undefined = docToConnection.get(doc.uri.toString()) || currentConnectionId || (await pickConnection(connections))?.id;
+      const docKey = doc.uri.toString();
+      const connectionId: string | undefined = docToConnection.get(docKey) || currentConnectionId || (await pickConnection(connections))?.id;
       if (!connectionId) return;
       const client = clients[connectionId];
       if (!client) { vscode.window.showErrorMessage("Not connected"); return; }
 
-      // Create results panel with React grid
-      const panel = vscode.window.createWebviewPanel("easyDb.queryResults", "Query Results", vscode.ViewColumn.Active, {
-        enableScripts: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(context.extensionUri, "media"),
-          vscode.Uri.joinPath(context.extensionUri, "media", "dist"),
-          vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist")
-        ]
-      });
-      const assets = resolveWebAssetUris({ webview: panel.webview, extensionUri: context.extensionUri });
-      const codiconUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist", "codicon.css"));
-      const nonce = getNonce();
-      const baseHtml = getReactHtml(panel.webview, assets, codiconUri, nonce);
-      panel.webview.html = baseHtml.replace('<div id="root"></div>', `<script nonce="${nonce}">window.__EASYDB_EXTERNAL__=true;</script><div id=\"root\"></div>`);
-      const post = (m: any) => panel.webview.postMessage(m);
-      post({ type: "init", externalDataMode: true });
-
-      const isSimpleSelectStar = /^\s*select\s+\*\s+from\s+([\w`".]+)(\s+limit\s+\d+)?\s*;?\s*$/i.test(sql);
-      if (isSimpleSelectStar) {
-        const tableToken = sql.match(/^\s*select\s+\*\s+from\s+([\w`".]+)(?:\s+limit\s+\d+)?\s*;?\s*$/i)![1];
-        const ref = parseTableRef(tableToken);
-        try {
-          const meta = await client.getTableInfo(ref);
-          const pkColumns = meta.columns.filter(c => !!c.isPrimaryKey).map(c => c.name);
-          const autoColumns = meta.columns.filter(c => !!c.isAutoIncrement).map(c => c.name);
-          const dateTimeColumns = meta.columns.filter(c => /date|time|timestamp/i.test(c.dataType)).map(c => c.name);
-          const columnTypes: Record<string, string> = {};
-          for (const c of meta.columns) {
-            const t = String(c.dataType || "").toLowerCase();
-            let cat = "text";
-            if (t === "date") cat = "date";
-            else if (t.includes("timestamp") || t.includes("datetime")) cat = "datetime";
-            else if (t.startsWith("time")) cat = "time";
-            else if (/(int|decimal|numeric|real|double|float)/.test(t)) cat = "number";
-            else if (t.includes("bool")) cat = "boolean";
-            columnTypes[c.name] = cat;
+      // Ensure a reusable panel exists for this document
+      let entry = resultsPanelByDoc.get(docKey);
+      if (!entry) {
+        const panel = vscode.window.createWebviewPanel("easyDb.queryResults", "Query Results", vscode.ViewColumn.Active, {
+          enableScripts: true,
+          localResourceRoots: [
+            vscode.Uri.joinPath(context.extensionUri, "media"),
+            vscode.Uri.joinPath(context.extensionUri, "media", "dist"),
+            vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist")
+          ]
+        });
+        const assets = resolveWebAssetUris({ webview: panel.webview, extensionUri: context.extensionUri });
+        const codiconUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist", "codicon.css"));
+        const nonce = getNonce();
+        const baseHtml = getReactHtml(panel.webview, assets, codiconUri, nonce);
+        panel.webview.html = baseHtml.replace('<div id="root"></div>', `<script nonce="${nonce}">window.__EASYDB_EXTERNAL__=true;</script><div id=\"root\"></div>`);
+        let resolveReady: (() => void) | null = null;
+        const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+        const readyListener = panel.webview.onDidReceiveMessage((m) => {
+          if (m?.type === "ready") {
+            resolveReady?.();
           }
-          post({ type: "schema", pkColumns, autoColumns, dateTimeColumns, columnTypes, readOnly: false });
-        } catch {
-          post({ type: "schema", pkColumns: [], readOnly: false });
-        }
+        });
+        panel.onDidDispose(() => {
+          readyListener.dispose();
+          resultsPanelByDoc.delete(docKey);
+        });
+        entry = { panel, ready, resolveReady, inFlight: false, latestSql: sql, pendingSql: null };
+        resultsPanelByDoc.set(docKey, entry);
+        // Attach a single listener to handle refresh messages from the webview
+        panel.webview.onDidReceiveMessage(async (m) => {
+          if (m?.type === "ready") {
+            entry!.resolveReady?.();
+            return;
+          }
+          if (m?.type === "refresh") {
+            // Re-run the last SQL
+            if (entry!.inFlight) {
+              entry!.pendingSql = entry!.latestSql;
+            } else {
+              const incomingReqId: string | undefined = typeof m.reqId === 'string' ? m.reqId : undefined;
+              void runSql(entry!, client, incomingReqId);
+            }
+          }
+        });
       } else {
-        post({ type: "schema", pkColumns: [], readOnly: true });
+        try { entry.panel.reveal(vscode.ViewColumn.Active, false); } catch {}
       }
 
-      // Listen for ready/refresh and (re)run the query. Keep listener to support repeated refreshes.
-      let inFlight = false;
-      panel.webview.onDidReceiveMessage(async (m) => {
-        if (m?.type !== "ready" && m?.type !== "refresh") return;
-        if (inFlight) return;
-        inFlight = true;
-        try {
-          // reset loading state on refresh
-          if (m?.type === "refresh") {
-            post({ type: "init", externalDataMode: true });
-          }
-          for await (const chunk of client.runQuery(sql)) {
-            post({ type: "queryChunk", id: chunk.id, columns: chunk.columns.map(c => sanitizeHtml(c)), rows: chunk.rows });
-          }
-          post({ type: "queryDone", id: "run", rowCount: 0, durationMs: 0 });
-        } catch (err: any) {
-          post({ type: "error", id: "run", message: String(err?.message ?? err) });
-        } finally {
-          inFlight = false;
-        }
-      });
+      const post = (m: any) => entry!.panel.webview.postMessage(m);
+
+      // Wait for first load
+      await entry.ready.catch(() => {});
+      entry.latestSql = sql;
+      if (entry.inFlight) {
+        // Queue this run; do not reset the UI now to avoid a stuck loading state
+        entry.pendingSql = sql;
+      } else {
+        void runSql(entry, client);
+      }
     }),
     vscode.commands.registerCommand("easyDb.runLine", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return;
       const doc = editor.document;
+      const docKey = doc.uri.toString();
       const line = doc.lineAt(editor.selection.active.line);
-      const selText = editor.selection && !editor.selection.isEmpty ? doc.getText(editor.selection) : doc.getText(line.range);
-      const sql = selText;
-      const connectionId: string | undefined = docToConnection.get(doc.uri.toString()) || currentConnectionId || (await pickConnection(connections))?.id;
+      const sql = editor.selection && !editor.selection.isEmpty ? doc.getText(editor.selection) : doc.getText(line.range);
+      const connectionId: string | undefined = docToConnection.get(docKey) || currentConnectionId || (await pickConnection(connections))?.id;
       if (!connectionId) return;
       const client = clients[connectionId];
       if (!client) { vscode.window.showErrorMessage("Not connected"); return; }
 
-      const panel = vscode.window.createWebviewPanel("easyDb.queryResults", "Query Results", vscode.ViewColumn.Active, {
-        enableScripts: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(context.extensionUri, "media"),
-          vscode.Uri.joinPath(context.extensionUri, "media", "dist"),
-          vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist")
-        ]
-      });
-      const assets = resolveWebAssetUris({ webview: panel.webview, extensionUri: context.extensionUri });
-      const codiconUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist", "codicon.css"));
-      const nonce = getNonce();
-      const baseHtml = getReactHtml(panel.webview, assets, codiconUri, nonce);
-      panel.webview.html = baseHtml.replace('<div id="root"></div>', `<script nonce="${nonce}">window.__EASYDB_EXTERNAL__=true;</script><div id=\"root\"></div>`);
-      const post = (m: any) => panel.webview.postMessage(m);
-      post({ type: "schema", pkColumns: [], readOnly: true });
-      const disposable = panel.webview.onDidReceiveMessage(async (m) => {
-        if (m?.type !== "ready") return;
-        disposable.dispose();
-        try {
-          for await (const chunk of client.runQuery(sql)) {
-            post({ type: "queryChunk", id: chunk.id, columns: chunk.columns.map(c => sanitizeHtml(c)), rows: chunk.rows });
-          }
-          post({ type: "queryDone", id: "run", rowCount: 0, durationMs: 0 });
-        } catch (err: any) {
-          post({ type: "error", id: "run", message: String(err?.message ?? err) });
-        }
-      });
+      // Reuse same mechanism as runQuery (will read current editor selection/text)
+      await vscode.commands.executeCommand("easyDb.runQuery");
     }),
     vscode.commands.registerCommand("easyDb.saveQuery", async () => {
       const editor = vscode.window.activeTextEditor;
@@ -438,21 +437,28 @@ export function activate(context: vscode.ExtensionContext) {
       const choice = await vscode.window.showQuickPick(items, { placeHolder: "Query Consoles" });
       if (!choice) return;
       if (choice.id === "default") {
-        // Reuse an existing doc or create new with basic template
-        const existing = consoles[0];
-        if (existing) {
-          await vscode.window.showTextDocument(existing, { preview: false });
-        } else {
-          const doc = await vscode.workspace.openTextDocument({ content: buildSqlTemplate(undefined, pick.driver), language: 'sql' });
-          await vscode.window.showTextDocument(doc, { preview: false });
-          docToConnection.set(doc.uri.toString(), pick.id);
-          indexConsole(doc, pick.id);
+        // Open or create the default console file at .vscode/easy-db/consoles/{connection_name}/default_console.sql
+        const dir = await getConsolesDir(pick.id);
+        const defaultUri = vscode.Uri.joinPath(dir, "default_console.sql");
+        try {
+          await vscode.workspace.fs.stat(defaultUri);
+        } catch {
+          const content = Buffer.from(buildSqlTemplate(undefined, pick.driver), 'utf8');
+          await vscode.workspace.fs.writeFile(defaultUri, content);
         }
-      } else if (choice.id === "new") {
-        const doc = await vscode.workspace.openTextDocument({ content: buildSqlTemplate(undefined, pick.driver), language: 'sql' });
+        const doc = await vscode.workspace.openTextDocument(defaultUri);
         await vscode.window.showTextDocument(doc, { preview: false });
         docToConnection.set(doc.uri.toString(), pick.id);
-        indexConsole(doc, pick.id);
+        await indexConsole(doc, pick.id);
+      } else if (choice.id === "new") {
+        const dir = await getConsolesDir(pick.id);
+        const file = vscode.Uri.joinPath(dir, `console-${Date.now()}.sql`);
+        const content = Buffer.from(buildSqlTemplate(undefined, pick.driver), 'utf8');
+        await vscode.workspace.fs.writeFile(file, content);
+        const doc = await vscode.workspace.openTextDocument(file);
+        await vscode.window.showTextDocument(doc, { preview: false });
+        docToConnection.set(doc.uri.toString(), pick.id);
+        await indexConsole(doc, pick.id);
       } else if (choice.id === "all") {
         if (consoles.length === 0) {
           vscode.window.showInformationMessage("No query consoles for this connection.");
@@ -478,9 +484,7 @@ async function createClient(context: vscode.ExtensionContext, cfg: StoredConnect
   }
   const runtimeCfg = { ...cfg } as any;
   if (password) runtimeCfg.password = password;
-  let client: DbClient;
-  if (cfg.driver === "postgres") client = new PostgresClient();
-  else client = new MySqlClient();
+  const client: DbClient = new MySqlClient();
   await client.connect(runtimeCfg);
   return client;
 }
@@ -513,4 +517,63 @@ function getReactHtml(webview: vscode.Webview, assets: { css: string[]; js: stri
     return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" /><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'nonce-${nonce}' ${webview.cspSource}; font-src ${webview.cspSource};" /><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${cssUri}" nonce="${nonce}" /><link rel="stylesheet" href="${codiconUri}" nonce="${nonce}" /><title>Results</title></head><body><div id="root"></div><script type="module" src="${jsUri}" nonce="${nonce}"></script></body></html>`;
   }
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8" /><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'nonce-${nonce}' ${webview.cspSource}; font-src ${webview.cspSource};" /><meta name="viewport" content="width=device-width, initial-scale=1.0">${assets.css.map(href => `<link rel="stylesheet" href="${href}" nonce="${nonce}" />`).join("\n  ")}<link rel="stylesheet" href="${codiconUri}" nonce="${nonce}" /><title>Results</title></head><body><div id="root"></div>${assets.js.map(src => `<script type="module" src="${src}"></script>`).join("\n  ")}</body></html>`;
+}
+
+async function runSql(entry: { panel: vscode.WebviewPanel; inFlight: boolean; latestSql: string; pendingSql: string | null }, client: DbClient, reuseReqId?: string): Promise<void> {
+  const post = (m: any) => entry.panel.webview.postMessage(m);
+  // Reset view and send schema hint based on latestSql
+  post({ type: "init", externalDataMode: true });
+  const sql = entry.latestSql;
+  const reqId = reuseReqId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    // Best-effort schema hint for select * from x
+    const isSimpleSelectStar = /^\s*select\s+\*\s+from\s+([\w`".]+)(\s+limit\s+\d+)?\s*;?\s*$/i.test(sql);
+    if (isSimpleSelectStar) {
+      // We cannot access parseTableRef here without circular imports; duplicate minimal logic
+      const token = sql.match(/^\s*select\s+\*\s+from\s+([\w`".]+)(?:\s+limit\s+\d+)?\s*;?\s*$/i)![1];
+      const strip = (s: string) => s.replace(/^[`\"]|[`\"]$/g, "");
+      const parts = token.split(".");
+      const ref = (parts.length === 2) ? { schema: strip(parts[0]), name: strip(parts[1]) } : { name: strip(token) } as any;
+      try {
+        const meta = await client.getTableInfo(ref);
+        const pkColumns = meta.columns.filter((c: any) => !!c.isPrimaryKey).map((c: any) => c.name);
+        const autoColumns = meta.columns.filter((c: any) => !!c.isAutoIncrement).map((c: any) => c.name);
+        const dateTimeColumns = meta.columns.filter((c: any) => /date|time|timestamp/i.test(c.dataType)).map((c: any) => c.name);
+        const columnTypes: Record<string, string> = {};
+        for (const c of meta.columns as any[]) {
+          const t = String((c as any).dataType || "").toLowerCase();
+          let cat = "text";
+          if (t === "date") cat = "date";
+          else if (t.includes("timestamp") || t.includes("datetime")) cat = "datetime";
+          else if (t.startsWith("time")) cat = "time";
+          else if (/(int|decimal|numeric|real|double|float)/.test(t)) cat = "number";
+          else if (t.includes("bool")) cat = "boolean";
+          columnTypes[(c as any).name] = cat;
+        }
+        post({ type: "schema", pkColumns, autoColumns, dateTimeColumns, columnTypes, readOnly: false, reqId });
+      } catch {
+        post({ type: "schema", pkColumns: [], readOnly: false, reqId });
+      }
+    } else {
+      post({ type: "schema", pkColumns: [], readOnly: true, reqId });
+    }
+
+    entry.inFlight = true;
+    for await (const chunk of client.runQuery(sql)) {
+      post({ type: "queryChunk", id: chunk.id, columns: (chunk.columns || []).map((c: any) => sanitizeHtml(c)), rows: chunk.rows, reqId });
+    }
+    post({ type: "queryDone", id: "run", rowCount: 0, durationMs: 0, reqId });
+  } catch (err: any) {
+    // Also show a VS Code notification to surface errors clearly
+    try { vscode.window.showErrorMessage(`Query failed: ${String(err?.message ?? err)}`); } catch {}
+    post({ type: "error", id: "run", message: String(err?.message ?? err), reqId });
+  } finally {
+    entry.inFlight = false;
+    if (entry.pendingSql) {
+      // Run the latest queued SQL
+      entry.latestSql = entry.pendingSql;
+      entry.pendingSql = null;
+      void runSql(entry, client);
+    }
+  }
 }

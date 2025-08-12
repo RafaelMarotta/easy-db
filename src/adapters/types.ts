@@ -10,7 +10,7 @@ export interface Variable {
 export interface ConnectionConfig {
   id: string;
   name: string;
-  driver: "postgres" | "mysql";
+  driver: "mysql";
   host: string;
   port: number;
   database?: string;

@@ -40,6 +40,8 @@ export class CrudViewPanel {
       try {
         if (msg.type === "fetchPage") {
           const limit = Math.min(Number(msg.pageSize ?? 50), 500);
+          const pageOffset = Number(msg.offset ?? 0);
+          const reqId: string | undefined = typeof msg.reqId === 'string' ? msg.reqId : undefined;
           // send schema/PK info first
           try {
             const meta = await client.getTableInfo(ref);
@@ -59,18 +61,26 @@ export class CrudViewPanel {
               else if (t.includes("bool")) cat = "boolean";
               columnTypes[c.name] = cat;
             }
-            panel.webview.postMessage({ type: "schema", pkColumns, autoColumns, dateTimeColumns, columnTypes, readOnly: false });
+            panel.webview.postMessage({ type: "schema", pkColumns, autoColumns, dateTimeColumns, columnTypes, readOnly: false, reqId });
           } catch {
             // ignore meta errors to keep grid usable
-            panel.webview.postMessage({ type: "schema", pkColumns: [], readOnly: false });
+            panel.webview.postMessage({ type: "schema", pkColumns: [], readOnly: false, reqId });
           }
-          const sql = `select * from ${this.qi(ref, client)} limit ${limit} offset ${Number(msg.offset ?? 0)}`;
+          const sql = `select * from ${this.qi(ref, client)} limit ${limit} offset ${pageOffset}`;
           let count = 0;
           for await (const chunk of client.runQuery(sql)) {
             count += chunk.rows.length;
-            panel.webview.postMessage({ type: "queryChunk", id: "crud", columns: chunk.columns.map(sanitizeHtml), rows: chunk.rows });
+            panel.webview.postMessage({ type: "queryChunk", id: "crud", columns: chunk.columns.map(sanitizeHtml), rows: chunk.rows, reqId });
           }
-          panel.webview.postMessage({ type: "queryDone", id: "crud", rowCount: count, durationMs: 0 });
+          let hasNext = false;
+          if (count === limit) {
+            const peekSql = `select * from ${this.qi(ref, client)} limit 1 offset ${pageOffset + limit}`;
+            for await (const chunk of client.runQuery(peekSql)) {
+              if (chunk.rows && chunk.rows.length > 0) { hasNext = true; }
+              break;
+            }
+          }
+          panel.webview.postMessage({ type: "queryDone", id: "crud", rowCount: count, durationMs: 0, hasNext, reqId });
         } else if (msg.type === "insertRow") {
           const affected = await client.insert(ref, msg.row ?? {});
           panel.webview.postMessage({ type: "mutationDone", affected });
@@ -131,13 +141,8 @@ export class CrudViewPanel {
   }
 
   private qi(ref: TableRef, client: DbClient): string {
-    if (client instanceof MySqlClient) {
-      const schema = ref.schema ? `\`${ref.schema.replace(/`/g, "``")}\`.` : "";
-      const name = `\`${ref.name.replace(/`/g, "``")}\``;
-      return `${schema}${name}`;
-    }
-    const schema = ref.schema ? `"${ref.schema.replace(/\"/g, '""')}".` : "";
-    const name = `"${ref.name.replace(/\"/g, '""')}"`;
+    const schema = ref.schema ? `\`${ref.schema.replace(/`/g, "``")}\`.` : "";
+    const name = `\`${ref.name.replace(/`/g, "``")}\``;
     return `${schema}${name}`;
   }
 }
