@@ -1,9 +1,18 @@
 {
-  "name": "easy-db-manager",
-  "displayName": "Easy DB Manager",
+  "name": "easy-db",
+  "displayName": "Easy DB",
   "description": "A secure, multi-engine database manager for VS Code with variables, schema explorer, CRUD and query runner.",
   "version": "0.1.0",
-  "publisher": "your-publisher-id",
+  "publisher": "easy-db",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RafaelMarotta/easy-db.git"
+  },
+  "bugs": {
+    "url": "https://github.com/RafaelMarotta/easy-db/issues"
+  },
+  "homepage": "https://github.com/RafaelMarotta/easy-db#readme",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
