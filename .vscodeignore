@@ -1,0 +1,47 @@
+.vscode/**
+.vscode-test/**
+
+# Exclude source; ship compiled code and built assets only
+src/**
+web/**
+
+# Build/test artifacts
+out/**
+coverage/**
+logs/**
+script/**
+scripts/**
+test/**
+tests/**
+
+# Configs and maps not needed at runtime
+**/*.map
+**/*.ts
+**/*.tsx
+**/*.jsx
+*.code-workspace
+.editorconfig
+.eslintrc*
+.prettier*
+tsconfig*.json
+vite.config.ts
+web/vite.config.ts
+
+# Misc
+.git/**
+.gitignore
+**/.DS_Store
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# Node modules: prune common non-runtime folders within production deps
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/example/**
+node_modules/**/examples/**
+node_modules/**/benchmark/**
+node_modules/**/.github/**
+node_modules/**/CHANGELOG*
+node_modules/**/README*
+
