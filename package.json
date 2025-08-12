@@ -2,7 +2,7 @@
   "name": "easy-db",
   "displayName": "Easy DB",
   "description": "A secure, multi-engine database manager for VS Code with variables, schema explorer, CRUD and query runner.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "easy-db",
   "repository": {
     "type": "git",
