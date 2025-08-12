@@ -14,7 +14,7 @@
   "homepage": "https://github.com/RafaelMarotta/easy-db#readme",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.50.0"
   },
   "categories": [
     "Other"
